@@ -1,0 +1,15 @@
+{
+  "name": "git-mcp-studio",
+  "version": "1.0.0",
+  "description": "Interactive Web Dashboard for executing operations via GitHub MCP Server",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
