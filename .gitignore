@@ -1,2 +1,9 @@
 /image copy.png
 /image.png
+node_modules/
+node_bin/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store

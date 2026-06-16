@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitMCP Studio - Interactive GitHub MCP Client</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Background glow elements for premium look -->
+    <div class="bg-glow purple-glow"></div>
+    <div class="bg-glow blue-glow"></div>
+
+    <!-- CONNECTION SCREEN -->
+    <main id="connection-screen" class="connection-screen">
+      <div class="glass-card connection-card">
+        <header class="card-header">
+          <div class="logo-area">
+            <svg class="logo-icon" viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+            </svg>
+            <span class="mcp-badge">MCP Client</span>
+          </div>
+          <h1>GitMCP Studio</h1>
+          <p>Connect to the GitHub Model Context Protocol server to explore, test, and execute operations on your GitHub account in real time.</p>
+        </header>
+
+        <form id="connect-form" class="connect-form">
+          <div class="form-group">
+            <label for="github-token">GitHub Personal Access Token (PAT)</label>
+            <div class="input-wrapper">
+              <input type="password" id="github-token" name="github-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="current-password">
+              <button type="button" id="toggle-token-visibility" class="icon-button" title="Toggle visibility">
+                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+            <span class="help-text">
+              The token is stored only in your active session and used locally.
+              <a href="https://github.com/settings/tokens/new?scopes=repo,public_repo,read:user" target="_blank" rel="noopener noreferrer">Generate a Token with necessary scopes →</a>
+            </span>
+          </div>
+
+          <div id="connection-error" class="error-banner hidden">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <span class="error-message">Connection failed</span>
+          </div>
+
+          <button type="submit" id="connect-submit" class="primary-btn pulse-glow">
+            <span>Connect Server</span>
+            <div class="loader hidden"></div>
+          </button>
+        </form>
+      </div>
+    </main>
+
+    <!-- DASHBOARD SCREEN (Hidden until connected) -->
+    <div id="dashboard-screen" class="dashboard-screen hidden">
+      <!-- SIDEBAR -->
+      <aside class="dashboard-sidebar glass-panel">
+        <div class="sidebar-header">
+          <div class="logo-area-small">
+            <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+            </svg>
+            <h2>GitMCP Studio</h2>
+          </div>
+          <span class="status-indicator-badge connected">Connected</span>
+        </div>
+
+        <div class="sidebar-search">
+          <div class="search-input-wrapper">
+            <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="tool-search" placeholder="Search GitHub tools...">
+          </div>
+        </div>
+
+        <div class="tools-list-container">
+          <div class="section-title">Discovered Tools (<span id="tools-count">0</span>)</div>
+          <ul id="tools-list" class="tools-list">
+            <!-- Dynamically populated -->
+          </ul>
+        </div>
+
+        <div class="sidebar-footer">
+          <button id="disconnect-btn" class="secondary-btn">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            <span>Disconnect</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="dashboard-content">
+        <!-- TOOL WORKSPACE -->
+        <section class="glass-panel workspace-panel">
+          <div id="no-tool-selected" class="no-selection-state">
+            <svg viewBox="0 0 24 24" width="64" height="64" stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round" class="floating-icon">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              <polygon points="12 11 12 17 17 14"></polygon>
+            </svg>
+            <h3>No Tool Selected</h3>
+            <p>Select a tool from the discovered list in the sidebar to execute operations on GitHub.</p>
+          </div>
+
+          <div id="tool-workspace" class="tool-workspace hidden">
+            <header class="workspace-header">
+              <div class="tool-meta">
+                <span class="tool-category-tag">GitHub Operation</span>
+                <h2 id="current-tool-name">github_list_repos</h2>
+              </div>
+              <p id="current-tool-desc" class="tool-description">Lists repositories for a user or organization.</p>
+            </header>
+
+            <form id="tool-form" class="tool-form">
+              <div id="dynamic-inputs" class="dynamic-inputs-grid">
+                <!-- Dynamically generated inputs -->
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" id="execute-btn" class="primary-btn pulse-glow">
+                  <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <span>Execute Tool</span>
+                  <div class="loader hidden"></div>
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <!-- OUTPUT PANEL -->
+        <section class="glass-panel output-panel">
+          <div class="output-header">
+            <h3>Response Output</h3>
+            <div id="output-meta" class="output-meta hidden">
+              <span id="status-badge" class="response-badge success">Success</span>
+              <span id="execution-time" class="meta-label">120ms</span>
+            </div>
+          </div>
+
+          <div id="output-body" class="output-body">
+            <div id="output-placeholder" class="output-placeholder">
+              <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+              <p>Execute a tool to see output results here.</p>
+            </div>
+
+            <div id="output-loader" class="output-loader hidden">
+              <div class="spinner"></div>
+              <p>Executing operation on GitHub...</p>
+            </div>
+
+            <!-- Pretty raw code output -->
+            <pre id="output-raw" class="output-raw hidden"><code id="output-code" class="language-json"></code></pre>
+
+            <!-- Rendered visual content template -->
+            <div id="output-rendered" class="output-rendered hidden">
+              <!-- Rendered template displays here -->
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="script.js"></script>
+</body>
+</html>
