@@ -3,6 +3,7 @@
 This file contains all the PowerShell commands executed to check the environment, install the portable Node.js environment, install dependencies, and launch the application.
 
 ---
+to run the  application .\node_bin\node.exe server.js
 
 ## 1. System Environment Diagnostics
 These commands were run to identify if Node.js/NPM was installed, detect the active port usages, and check the Python runtime.

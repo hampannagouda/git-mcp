@@ -501,8 +501,8 @@ function tryRenderVisualMarkup(toolName, response) {
       const isPrivate = repo.private ? 'Private' : 'Public';
       
       html += `
-        <div class="result-card">
-          <div class="result-card-header">
+        <div class="result-card" style="position: relative;">
+          <div class="result-card-header" style="padding-right: 32px;">
             <span class="result-card-title"><a href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a></span>
             <span class="result-card-badge">${isPrivate}</span>
           </div>
@@ -521,6 +521,16 @@ function tryRenderVisualMarkup(toolName, response) {
               ${language}
             </span>
           </div>
+          <button class="icon-button-small delete-repo-card-btn" 
+                  data-owner="${escapeHtml(repo.owner?.login || name.split('/')[0] || '')}" 
+                  data-repo="${escapeHtml(repo.name || name.split('/')[1] || '')}" 
+                  title="Delete Repository" 
+                  style="position: absolute; top: 12px; right: 12px; color: var(--color-error); z-index: 5;">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
         </div>
       `;
     });
@@ -696,6 +706,20 @@ function tryRenderVisualMarkup(toolName, response) {
     `;
   }
 
+  // Visual formatting for delete repository
+  if (toolName.includes('delete_repository') && parsed) {
+    return `
+      <div class="list-results-container">
+        <div class="result-card" style="background: var(--color-error-glow); border-color: var(--color-error);">
+          <div class="result-card-header">
+            <span class="result-card-title" style="color: var(--color-error); font-weight: bold;">🗑 Repository Deleted</span>
+          </div>
+          <p class="result-card-desc" style="margin-bottom: 8px;">${escapeHtml(parsed.message || 'The repository has been successfully deleted.')}</p>
+        </div>
+      </div>
+    `;
+  }
+
   return null;
 }
 
@@ -704,3 +728,225 @@ function showError(msg) {
   connectionError.querySelector('.error-message').innerText = msg;
   connectionError.classList.remove('hidden');
 }
+
+// ==========================================================================
+// Gemini Chatbot Client Logic
+// ==========================================================================
+
+let chatHistory = [];
+
+const chatbotFab = document.getElementById('chatbot-fab');
+const chatbotDrawer = document.getElementById('chatbot-drawer');
+const chatCloseBtn = document.getElementById('chat-close-btn');
+const chatSettingsBtn = document.getElementById('chat-settings-btn');
+const chatSettingsPanel = document.getElementById('chat-settings-panel');
+const geminiApiKeyInput = document.getElementById('gemini-api-key');
+const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
+const chatMessagesContainer = document.getElementById('chat-messages-container');
+const chatStatusIndicator = document.getElementById('chat-status-indicator');
+const chatStatusText = document.getElementById('chat-status-text');
+const chatInputForm = document.getElementById('chat-input-form');
+const chatUserInput = document.getElementById('chat-user-input');
+
+// Initialize settings
+if (localStorage.getItem('gemini_api_key')) {
+  geminiApiKeyInput.value = localStorage.getItem('gemini_api_key');
+}
+
+// Toggle Chat Drawer
+chatbotFab.addEventListener('click', () => {
+  chatbotDrawer.classList.toggle('hidden');
+  chatbotFab.querySelector('.fab-badge').classList.add('hidden');
+  if (!chatbotDrawer.classList.contains('hidden')) {
+    chatUserInput.focus();
+    scrollToBottom();
+  }
+});
+
+chatCloseBtn.addEventListener('click', () => {
+  chatbotDrawer.classList.add('hidden');
+});
+
+// Toggle settings panel
+chatSettingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  chatSettingsPanel.classList.toggle('hidden');
+});
+
+// Save settings key
+saveChatSettingsBtn.addEventListener('click', () => {
+  const key = geminiApiKeyInput.value.trim();
+  if (key) {
+    localStorage.setItem('gemini_api_key', key);
+  } else {
+    localStorage.removeItem('gemini_api_key');
+  }
+  chatSettingsPanel.classList.add('hidden');
+});
+
+// Auto-resize input textarea
+chatUserInput.addEventListener('input', () => {
+  chatUserInput.style.height = 'auto';
+  chatUserInput.style.height = (chatUserInput.scrollHeight) + 'px';
+});
+
+// Suggestion Chips
+document.querySelectorAll('.chat-quick-chips .chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const query = chip.getAttribute('data-query');
+    sendChatMessage(query);
+  });
+});
+
+// Form submission
+chatInputForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = chatUserInput.value.trim();
+  if (!text) return;
+  sendChatMessage(text);
+  chatUserInput.value = '';
+  chatUserInput.style.height = 'auto';
+});
+
+// Send message to backend API
+async function sendChatMessage(text) {
+  // Append user message to UI
+  appendChatMessage('user', text);
+  
+  // Set up loading state
+  chatStatusText.innerText = 'Thinking...';
+  chatStatusIndicator.classList.remove('hidden');
+  scrollToBottom();
+
+  const apiKey = localStorage.getItem('gemini_api_key') || '';
+  
+  // Add to local history
+  chatHistory.push({ role: 'user', content: text });
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messages: chatHistory,
+        apiKey: apiKey
+      })
+    });
+
+    const data = await response.json();
+    chatStatusIndicator.classList.add('hidden');
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to get response from Gemini.');
+    }
+
+    // Append AI response to UI
+    appendChatMessage('bot', data.message);
+    
+    // Update local history with backend's update
+    if (data.historyUpdate && Array.isArray(data.historyUpdate)) {
+      chatHistory = chatHistory.concat(data.historyUpdate);
+    } else {
+      chatHistory.push({ role: 'model', content: data.message });
+    }
+
+  } catch (error) {
+    chatStatusIndicator.classList.add('hidden');
+    appendChatMessage('bot', `Error: ${error.message}`, true);
+    chatHistory.pop();
+  }
+  scrollToBottom();
+}
+
+// Append a message bubble to the container
+function appendChatMessage(role, text, isError = false) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `chat-message ${role}`;
+  
+  const bubbleDiv = document.createElement('div');
+  bubbleDiv.className = 'message-bubble';
+  if (isError) {
+    bubbleDiv.style.color = 'var(--color-error)';
+    bubbleDiv.style.borderColor = 'var(--color-error-glow)';
+    bubbleDiv.style.background = 'var(--color-error-glow)';
+  }
+  
+  bubbleDiv.innerHTML = role === 'bot' ? formatMarkdown(text) : escapeHtml(text);
+  messageDiv.appendChild(bubbleDiv);
+  
+  chatMessagesContainer.appendChild(messageDiv);
+}
+
+// Scroll messages to bottom
+function scrollToBottom() {
+  chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+}
+
+// Render markdown logic
+function formatMarkdown(text) {
+  let html = escapeHtml(text);
+  
+  // Replace code blocks: ```code```
+  html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+    return `<pre><code>${code.trim()}</code></pre>`;
+  });
+  
+  // Replace inline code: `code`
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Replace bold: **text**
+  html = html.replace(/\*\*([\s\S]*?)\*\*/g, '<strong>$1</strong>');
+  
+  // Replace bullet points
+  html = html.replace(/^\s*-\s+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+  html = html.replace(/<\/ul>\s*<ul>/g, '');
+  
+  // Replace line breaks outside pre blocks
+  const parts = html.split(/(<pre>[\s\S]*?<\/pre>)/g);
+  html = parts.map(part => {
+    if (part.startsWith('<pre>')) return part;
+    return part.replace(/\n/g, '<br>');
+  }).join('');
+  
+  return html;
+}
+
+// Event delegation for visual card delete button clicks
+document.addEventListener('click', (e) => {
+  const deleteBtn = e.target.closest('.delete-repo-card-btn');
+  if (deleteBtn) {
+    e.preventDefault();
+    const owner = deleteBtn.getAttribute('data-owner');
+    const repo = deleteBtn.getAttribute('data-repo');
+    
+    // Switch to delete repository tool
+    const deleteTool = tools.find(t => t.name === 'delete_repository');
+    if (deleteTool) {
+      selectTool(deleteTool);
+      
+      // Update sidebar active status
+      document.querySelectorAll('.tool-item').forEach(item => {
+        const nameEl = item.querySelector('.tool-item-name');
+        if (nameEl && nameEl.innerText === 'delete_repository') {
+          item.classList.add('active');
+        } else {
+          item.classList.remove('active');
+        }
+      });
+      
+      // Populate inputs with short delay for DOM rendering
+      setTimeout(() => {
+        const ownerInput = document.getElementById('input-owner');
+        const repoInput = document.getElementById('input-repo');
+        if (ownerInput) ownerInput.value = owner;
+        if (repoInput) repoInput.value = repo;
+        
+        // Scroll workspace into view
+        document.getElementById('tool-workspace').scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    }
+  }
+});
