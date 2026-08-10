@@ -8,6 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "@modelcontextprotocol/sdk": "^1.0.1",
     "@modelcontextprotocol/server-github": "^2025.4.8",
     "dotenv": "^16.4.5",

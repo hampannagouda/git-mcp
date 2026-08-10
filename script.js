@@ -730,10 +730,11 @@ function showError(msg) {
 }
 
 // ==========================================================================
-// Gemini Chatbot Client Logic
+// AI Chatbot Client Logic (Gemini + Claude)
 // ==========================================================================
 
 let chatHistory = [];
+let selectedProvider = localStorage.getItem('ai_provider') || 'gemini';
 
 const chatbotFab = document.getElementById('chatbot-fab');
 const chatbotDrawer = document.getElementById('chatbot-drawer');
@@ -741,6 +742,10 @@ const chatCloseBtn = document.getElementById('chat-close-btn');
 const chatSettingsBtn = document.getElementById('chat-settings-btn');
 const chatSettingsPanel = document.getElementById('chat-settings-panel');
 const geminiApiKeyInput = document.getElementById('gemini-api-key');
+const claudeApiKeyInput = document.getElementById('claude-api-key');
+const providerGeminiBtn = document.getElementById('provider-gemini-btn');
+const providerClaudeBtn = document.getElementById('provider-claude-btn');
+const activeProviderBadge = document.getElementById('active-provider-badge');
 const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
 const chatMessagesContainer = document.getElementById('chat-messages-container');
 const chatStatusIndicator = document.getElementById('chat-status-indicator');
@@ -748,10 +753,15 @@ const chatStatusText = document.getElementById('chat-status-text');
 const chatInputForm = document.getElementById('chat-input-form');
 const chatUserInput = document.getElementById('chat-user-input');
 
-// Initialize settings
+// Initialize saved keys
 if (localStorage.getItem('gemini_api_key')) {
   geminiApiKeyInput.value = localStorage.getItem('gemini_api_key');
 }
+if (localStorage.getItem('claude_api_key')) {
+  claudeApiKeyInput.value = localStorage.getItem('claude_api_key');
+}
+// Set initial provider UI
+updateProviderUI(selectedProvider);
 
 // Toggle Chat Drawer
 chatbotFab.addEventListener('click', () => {
@@ -773,16 +783,59 @@ chatSettingsBtn.addEventListener('click', (e) => {
   chatSettingsPanel.classList.toggle('hidden');
 });
 
-// Save settings key
+// Save settings
 saveChatSettingsBtn.addEventListener('click', () => {
-  const key = geminiApiKeyInput.value.trim();
-  if (key) {
-    localStorage.setItem('gemini_api_key', key);
+  const geminiKey = geminiApiKeyInput.value.trim();
+  const claudeKey = claudeApiKeyInput.value.trim();
+
+  if (geminiKey) {
+    localStorage.setItem('gemini_api_key', geminiKey);
   } else {
     localStorage.removeItem('gemini_api_key');
   }
+
+  if (claudeKey) {
+    localStorage.setItem('claude_api_key', claudeKey);
+  } else {
+    localStorage.removeItem('claude_api_key');
+  }
+
   chatSettingsPanel.classList.add('hidden');
 });
+
+// Provider toggle buttons
+providerGeminiBtn.addEventListener('click', () => {
+  selectedProvider = 'gemini';
+  localStorage.setItem('ai_provider', 'gemini');
+  updateProviderUI('gemini');
+  // Clear history when switching providers
+  chatHistory = [];
+});
+
+providerClaudeBtn.addEventListener('click', () => {
+  selectedProvider = 'claude';
+  localStorage.setItem('ai_provider', 'claude');
+  updateProviderUI('claude');
+  // Clear history when switching providers
+  chatHistory = [];
+});
+
+// Update provider UI state
+function updateProviderUI(provider) {
+  if (provider === 'claude') {
+    providerClaudeBtn.classList.add('active');
+    providerGeminiBtn.classList.remove('active');
+    document.getElementById('claude-key-group').style.display = '';
+    document.getElementById('gemini-key-group').style.display = 'none';
+    if (activeProviderBadge) activeProviderBadge.textContent = 'Claude';
+  } else {
+    providerGeminiBtn.classList.add('active');
+    providerClaudeBtn.classList.remove('active');
+    document.getElementById('gemini-key-group').style.display = '';
+    document.getElementById('claude-key-group').style.display = 'none';
+    if (activeProviderBadge) activeProviderBadge.textContent = 'Gemini';
+  }
+}
 
 // Auto-resize input textarea
 chatUserInput.addEventListener('input', () => {
@@ -812,26 +865,29 @@ chatInputForm.addEventListener('submit', (e) => {
 async function sendChatMessage(text) {
   // Append user message to UI
   appendChatMessage('user', text);
-  
+
   // Set up loading state
-  chatStatusText.innerText = 'Thinking...';
+  const providerLabel = selectedProvider === 'claude' ? 'Claude' : 'Gemini';
+  chatStatusText.innerText = `${providerLabel} is thinking...`;
   chatStatusIndicator.classList.remove('hidden');
   scrollToBottom();
 
-  const apiKey = localStorage.getItem('gemini_api_key') || '';
-  
+  // Pick the right API key for the selected provider
+  const apiKey = selectedProvider === 'claude'
+    ? (localStorage.getItem('claude_api_key') || '')
+    : (localStorage.getItem('gemini_api_key') || '');
+
   // Add to local history
   chatHistory.push({ role: 'user', content: text });
 
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: chatHistory,
-        apiKey: apiKey
+        apiKey,
+        provider: selectedProvider
       })
     });
 
@@ -839,17 +895,17 @@ async function sendChatMessage(text) {
     chatStatusIndicator.classList.add('hidden');
 
     if (!response.ok || !data.success) {
-      throw new Error(data.error || 'Failed to get response from Gemini.');
+      throw new Error(data.error || `Failed to get response from ${providerLabel}.`);
     }
 
     // Append AI response to UI
     appendChatMessage('bot', data.message);
-    
-    // Update local history with backend's update
+
+    // Update local history with simplified format
     if (data.historyUpdate && Array.isArray(data.historyUpdate)) {
       chatHistory = chatHistory.concat(data.historyUpdate);
     } else {
-      chatHistory.push({ role: 'model', content: data.message });
+      chatHistory.push({ role: 'assistant', content: data.message });
     }
 
   } catch (error) {

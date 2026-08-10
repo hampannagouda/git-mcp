@@ -4,6 +4,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import Anthropic from '@anthropic-ai/sdk';
 
 dotenv.config();
 
@@ -215,149 +216,211 @@ async function callGeminiAPI(apiKey, requestPayload, systemInstruction) {
   throw new Error("All fallback models failed due to rate limits or high demand. Please try again later.");
 }
 
-// Endpoint for Gemini Chatbot with function calling
-app.post('/api/chat', async (req, res) => {
-  const { messages, apiKey: clientApiKey } = req.body;
-  const apiKey = clientApiKey || process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return res.status(400).json({ error: 'Gemini API Key is required. Please set it in settings or .env file.' });
+// ==========================================================================
+// Chat Handler: Gemini
+// ==========================================================================
+async function handleGeminiChat(messages, apiKey) {
+  // Prepare tools if connected to MCP
+  let tools = [];
+  if (mcpClient) {
+    try {
+      const toolsResponse = await mcpClient.listTools();
+      if (toolsResponse && toolsResponse.tools) {
+        const functionDeclarations = toolsResponse.tools.map(tool => ({
+          name: tool.name,
+          description: tool.description || `Execute GitHub operation: ${tool.name}`,
+          parameters: mapJsonSchemaToGemini(tool.inputSchema)
+        }));
+        tools = [{ functionDeclarations }];
+      }
+    } catch (err) {
+      console.error('Failed to retrieve MCP tools for Gemini:', err);
+    }
   }
 
-  try {
-    // 1. Prepare tools if connected to MCP
-    let tools = [];
-    if (mcpClient) {
-      try {
-        const toolsResponse = await mcpClient.listTools();
-        if (toolsResponse && toolsResponse.tools) {
-          const functionDeclarations = toolsResponse.tools.map(tool => ({
-            name: tool.name,
-            description: tool.description || `Execute GitHub operation: ${tool.name}`,
-            parameters: mapJsonSchemaToGemini(tool.inputSchema)
-          }));
-          tools = [{ functionDeclarations }];
+  const systemInstruction = {
+    role: 'system',
+    parts: [{
+      text: 'You are GitMCP Copilot, a helpful AI developer assistant integrated into GitMCP Studio. ' +
+            'You help developers inspect, manage, and modify their GitHub repositories. ' +
+            'You have access to a set of GitHub MCP tools to execute operations. ' +
+            'Always use tools when the user requests a GitHub operation (e.g. search, list, get file, create issues/PRs, delete repo). ' +
+            'When the user requests to delete a repository, you must first ask for their explicit confirmation before executing the delete_repository tool. ' +
+            'Format your text answers nicely with markdown, code blocks, lists, and bold text. Keep answers relevant, friendly, and concise.'
+    }]
+  };
+
+  // Convert simplified messages to Gemini format
+  let contents = messages.map(msg => {
+    let role = msg.role;
+    if (role === 'assistant' || role === 'bot') role = 'model';
+    return { role, parts: [{ text: msg.content || '' }] };
+  });
+
+  let loopCount = 0;
+  const maxLoops = 5;
+  let currentResponse = null;
+
+  while (loopCount < maxLoops) {
+    loopCount++;
+    const requestPayload = { contents };
+    if (tools.length > 0) requestPayload.tools = tools;
+
+    const responseData = await callGeminiAPI(apiKey, requestPayload, systemInstruction);
+    const candidate = responseData.candidates?.[0];
+    const modelContent = candidate?.content;
+
+    if (!modelContent) throw new Error('Empty response received from Gemini API.');
+
+    const functionCalls = modelContent.parts?.filter(part => part.functionCall);
+
+    if (functionCalls && functionCalls.length > 0) {
+      console.log(`Gemini requested ${functionCalls.length} function call(s).`);
+      contents.push(modelContent);
+      const responseParts = [];
+
+      for (const fcPart of functionCalls) {
+        const { name, args } = fcPart.functionCall;
+        let toolResult = null;
+        try {
+          if (!mcpClient) throw new Error('GitHub MCP server is disconnected.');
+          console.log(`Executing tool ${name} for Gemini...`);
+          const mcpResponse = await mcpClient.callTool({ name, arguments: args || {} });
+          toolResult = mcpResponse;
+        } catch (toolError) {
+          console.error(`Error executing tool ${name}:`, toolError);
+          toolResult = { error: toolError.message || `Failed to execute tool ${name}` };
         }
-      } catch (err) {
-        console.error('Failed to retrieve MCP tools for chat:', err);
+        responseParts.push({ functionResponse: { name, response: { result: toolResult } } });
       }
+
+      contents.push({ role: 'user', parts: responseParts });
+    } else {
+      currentResponse = modelContent;
+      break;
     }
+  }
 
-    // 2. Prepare the payload for Gemini API
-    const systemInstruction = {
-      role: 'system',
-      parts: [{
-        text: 'You are GitMCP Copilot, a helpful AI developer assistant integrated into GitMCP Studio. ' +
-              'You help developers inspect, manage, and modify their GitHub repositories. ' +
-              'You have access to a set of GitHub MCP tools to execute operations. ' +
-              'Always use tools when the user requests a GitHub operation (e.g. search, list, get file, create issues/PRs, delete repo). ' +
-              'When the user requests to delete a repository, you must first ask for their explicit confirmation (e.g. "Are you sure you want to delete owner/repo?") before executing the delete_repository tool. ' +
-              'Format your text answers nicely with markdown, code blocks, lists, and bold text. Keep answers relevant, friendly, and concise.'
-      }]
+  if (!currentResponse) throw new Error('Reached maximum tool-calling loops without a final response.');
+  return currentResponse.parts?.[0]?.text || '';
+}
+
+// ==========================================================================
+// Chat Handler: Claude (Anthropic)
+// ==========================================================================
+async function handleClaudeChat(messages, apiKey) {
+  const client = new Anthropic({ apiKey });
+
+  // Prepare tools if connected to MCP
+  let claudeTools = [];
+  if (mcpClient) {
+    try {
+      const toolsResponse = await mcpClient.listTools();
+      if (toolsResponse && toolsResponse.tools) {
+        claudeTools = toolsResponse.tools.map(tool => ({
+          name: tool.name,
+          description: tool.description || `Execute GitHub operation: ${tool.name}`,
+          input_schema: tool.inputSchema || { type: 'object', properties: {} }
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to retrieve MCP tools for Claude:', err);
+    }
+  }
+
+  const systemPrompt =
+    'You are GitMCP Copilot, a helpful AI developer assistant integrated into GitMCP Studio. ' +
+    'You help developers inspect, manage, and modify their GitHub repositories. ' +
+    'You have access to a set of GitHub MCP tools to execute operations. ' +
+    'Always use tools when the user requests a GitHub operation (e.g. search, list, get file, create issues/PRs, delete repo). ' +
+    'When the user requests to delete a repository, you must first ask for their explicit confirmation before executing the delete_repository tool. ' +
+    'Format your text answers nicely with markdown, code blocks, lists, and bold text. Keep answers relevant, friendly, and concise.';
+
+  // Convert simplified messages to Claude format
+  const claudeMessages = messages.map(msg => ({
+    role: msg.role === 'assistant' ? 'assistant' : 'user',
+    content: msg.content || ''
+  }));
+
+  let currentMessages = [...claudeMessages];
+  let finalText = '';
+
+  for (let i = 0; i < 5; i++) {
+    const requestParams = {
+      model: 'claude-sonnet-4-5',
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: currentMessages
     };
+    if (claudeTools.length > 0) requestParams.tools = claudeTools;
 
-    // Construct request contents
-    let contents = messages.map(msg => {
-      let role = msg.role;
-      if (role === 'assistant' || role === 'bot') role = 'model';
-      
-      if (msg.parts) {
-        return { role, parts: msg.parts };
-      }
-      
-      const parts = [];
-      if (msg.content) {
-        parts.push({ text: msg.content });
-      }
-      if (msg.functionCalls) {
-        parts.push({ functionCalls: msg.functionCalls });
-      }
-      if (msg.functionResponse) {
-        parts.push({ functionResponse: msg.functionResponse });
-      }
-      return { role, parts };
-    });
+    console.log(`Calling Claude (attempt ${i + 1})...`);
+    const response = await client.messages.create(requestParams);
 
-    // We can run a loop to handle recursive function calls
-    let loopCount = 0;
-    const maxLoops = 5;
-    let currentResponse = null;
+    if (response.stop_reason === 'tool_use') {
+      currentMessages.push({ role: 'assistant', content: response.content });
+      const toolResults = [];
 
-    while (loopCount < maxLoops) {
-      loopCount++;
-      
-      const requestPayload = {
-        contents
-      };
-      
-      if (tools.length > 0) {
-        requestPayload.tools = tools;
-      }
-
-      const responseData = await callGeminiAPI(apiKey, requestPayload, systemInstruction);
-      const candidate = responseData.candidates?.[0];
-      const modelContent = candidate?.content;
-
-      if (!modelContent) {
-        throw new Error('Empty response received from Gemini API.');
-      }
-
-      // Check if there are function calls requested
-      const functionCalls = modelContent.parts?.filter(part => part.functionCall);
-      
-      if (functionCalls && functionCalls.length > 0) {
-        console.log(`Gemini requested ${functionCalls.length} function calls:`, JSON.stringify(functionCalls));
-        
-        contents.push(modelContent);
-        
-        const responseParts = [];
-        for (const fcPart of functionCalls) {
-          const { name, args } = fcPart.functionCall;
-          let toolResult = null;
-          
+      for (const block of response.content) {
+        if (block.type === 'tool_use') {
+          let toolContent;
           try {
-            if (!mcpClient) {
-              throw new Error("GitHub MCP server is disconnected. Please connect first.");
-            }
-            console.log(`Executing tool ${name} on behalf of Gemini...`);
-            const mcpResponse = await mcpClient.callTool({
-              name,
-              arguments: args || {}
-            });
-            toolResult = mcpResponse;
-          } catch (toolError) {
-            console.error(`Error executing tool ${name}:`, toolError);
-            toolResult = { error: toolError.message || `Failed to execute tool ${name}` };
+            if (!mcpClient) throw new Error('GitHub MCP server is disconnected.');
+            console.log(`Claude requested tool: ${block.name}`);
+            const mcpResponse = await mcpClient.callTool({ name: block.name, arguments: block.input || {} });
+            toolContent = JSON.stringify(mcpResponse);
+          } catch (err) {
+            console.error(`Error executing tool ${block.name}:`, err);
+            toolContent = JSON.stringify({ error: err.message });
           }
-          
-          responseParts.push({
-            functionResponse: {
-              name,
-              response: { result: toolResult }
-            }
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: toolContent
           });
         }
-        
-        contents.push({
-          role: 'user',
-          parts: responseParts
-        });
-        
-        continue;
-      } else {
-        currentResponse = modelContent;
-        break;
       }
-    }
 
-    if (!currentResponse) {
-      throw new Error('Reached maximum tool-calling recursion loops without a final response.');
+      currentMessages.push({ role: 'user', content: toolResults });
+    } else {
+      const textBlock = response.content.find(b => b.type === 'text');
+      finalText = textBlock?.text || '';
+      break;
+    }
+  }
+
+  return finalText;
+}
+
+// ==========================================================================
+// Endpoint: AI Chat (Gemini or Claude)
+// ==========================================================================
+app.post('/api/chat', async (req, res) => {
+  const { messages, apiKey: clientApiKey, provider = 'gemini' } = req.body;
+
+  try {
+    let finalText = '';
+
+    if (provider === 'claude') {
+      const apiKey = clientApiKey || process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({ error: 'Anthropic API Key is required. Set it in settings or ANTHROPIC_API_KEY in .env.' });
+      }
+      console.log('Routing chat to Claude...');
+      finalText = await handleClaudeChat(messages, apiKey);
+    } else {
+      const apiKey = clientApiKey || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({ error: 'Gemini API Key is required. Set it in settings or GEMINI_API_KEY in .env.' });
+      }
+      console.log('Routing chat to Gemini...');
+      finalText = await handleGeminiChat(messages, apiKey);
     }
 
     res.json({
       success: true,
-      message: currentResponse.parts?.[0]?.text || '',
-      historyUpdate: contents.slice(messages.length)
+      message: finalText,
+      historyUpdate: [{ role: 'assistant', content: finalText }]
     });
 
   } catch (error) {
